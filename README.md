@@ -24,5 +24,4 @@ Small REPL models of database functions to be integrated into final product
 
 ## Todo
 
-- Finish all necessary database functions
 - Create GUI for software and integrate with existing functions

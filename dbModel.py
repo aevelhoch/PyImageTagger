@@ -1,6 +1,9 @@
 import sqlite3 as sq
 import glob
 import sys
+from os import path
+import shutil
+import boolExpConvert as convert
 
 if len(sys.argv[:]) == 2:
     print(f"Attempting to load db:\'{sys.argv[1]}\'")
@@ -10,21 +13,34 @@ else:
     con = sq.connect('model.db')
 
 menu = """Choose option: (In any function, enter x to cancel)
-Display: P - Print all dbs
+Display: P - [P]rint all dbs
          V - Print all files with certain tag
-Folders: F - Add all image files in folder to files db
-Entries: A - Add file or tag entry to db
-         D - Delete file or tag entry
-Tags:    T - Tag file with tag
-         R - Remove tag from file
-         M - Tag multiple files with tag
+Folders: F - Add all image files in [F]older to files db
+Entries: A - [A]dd file or tag entry to db
+         D - [D]elete file or tag entry
+Tags:    T - [T]ag file with tag
+         R - [R]emove tag from file
+         M - Tag [M]ultiple files with tag
+Queries: E - Insert tags into [E]xample query
+         C - [C]ustom query
 Z - Test helper functions
-I - Reinitialize dbs
-Q - Quit"""
+I - Re[I]nitialize dbs
+Q - [Q]uit"""
 
 helperMenu = """======
 C - checkDuplicate (see if filepath/tag is already in table)
+G - getTags (get list of tags id/name/both)
 ======"""
+
+queryInstructions = """
+    Enter a boolean expressions using ONLY:
+    () - perform first (must be paired)
+    v - OR (for UNION)
+    ^ - AND (for INTERSECTION)
+    x - NOT (for EXCEPT)
+    tagname - the name of any tag
+    ' ' - spaces to seperate
+>"""
 
 """ Reference for Tables:
 files_____________|_tags_____|_view______________
@@ -42,6 +58,39 @@ def checkDuplicate(name, type):
                 #print("duplicate found!")
                 dupeFound = True
     return dupeFound
+    
+# HELPER
+# Helper function to return list of tag names w/numbers
+def getTags(type):
+    if type == "both": type = "*"
+    data = con.execute(f"SELECT {type} FROM tags")
+    tags = []
+    for row in data:
+        if len(row) > 1:
+            listRow = []
+            for entry in row:
+                listRow.append(entry)
+            tags.append(listRow)
+        else:
+            tags.append(row[0])
+    return tags
+
+# MENU OPTION
+# Select a subset of files to view, by tags
+def selectSubset():
+    print("Currently testing 1 AND (2 NOT 3)") # let's try five AND one NOT face, so 13, 9, 4
+    tag1 = input("id 1: ")
+    tag2 = input("id 2: ")
+    tag3 = input("id 3: ")
+    print(f"Returning tags with: \'{tag1}\' AND (\'{tag2}\' NOT \'{tag3}\')")
+    sql = 'SELECT * FROM files WHERE tags LIKE (?) UNION SELECT * FROM ( SELECT * FROM files WHERE tags LIKE (?) EXCEPT SELECT * FROM files WHERE tags LIKE (?) )'
+    data = ("%_"+str(tag1)+"_%","%_"+str(tag2)+"_%","%_"+str(tag3)+"_%")
+    print(sql, data)
+    with con:
+        output = con.execute(sql, data)
+    print(output)
+    for row in output:
+        print(row)
 
 # MENU OPTION
 # Helper function to print current status of all databases
@@ -276,11 +325,11 @@ def folderToDB():
         # Get the current files, so we don't add duplicates
         currTable = []
         with con:
-            currTable = con.execute("SELECT * FROM files")
+            currTable = con.execute("SELECT address FROM files")
         fileNames = []
         for entry in currTable:
-            fileNames.append(entry[1])
-        #print(fileNames)
+            #fileNames.append(entry[1])
+            fileNames.append(entry[0])
         first = True # first to make sql statement building easier
         print("Inserting...")
         sql = 'PRAGMA testing' # default options for sql, data so execute doesn't error if no new files found
@@ -295,10 +344,48 @@ def folderToDB():
                     sql += ',(?, ?)'
                     data.append(filePath)
                     data.append("_")
+            else:
+                print(f"Duplicate file \'{filePath}\' found. Not added to database.")
         with con: # and finally, execute
             con.execute(sql, data)
     print("---")
 
+# MENU OPTION
+# Use boolExpConvert.py to get files from db using specific query
+def customQuery():
+    print(queryInstructions)
+    print("The current list of available tags is:")
+    tags = getTags("both")
+    validNames = []
+    for tag in tags:
+        print(f"{tag[0]} - {tag[1]}")
+    entry = input(">")
+    # Tokenize expression
+    exp = convert.tokenizeExpression(entry)
+    # Validate that all tokens are fine AND that entire expression is fine
+    tokens = convert.validateTokensExp(exp, tags)
+    expression = convert.validateExpressionExp(exp)
+    if tokens and expression:
+        print("Expression is valid")
+        convertResults = convert.convertTokenizedExp(exp, tags)
+        finalData = convertResults[1]
+        finalSQL = convert.translateToSQLite(exp)
+        #print(finalSQL)
+        #print(finalData)
+        with con:
+            output = con.execute(finalSQL, finalData)
+        filePaths = []
+        for row in output:
+            filePaths.append(row[1])
+        # Check if we want to copy some images to filter folder
+        y = input("Would you like to copy the selected files to \'./filter/\'?")
+        if y.upper() == "Y":
+            for filePath in filePaths:
+                fileName = filePath.rpartition("/")[2]
+                shutil.copy(filePath, path.abspath("./filter/"))
+    else:
+        print("Expression is invalid.")
+        
 # simple REPL to show working functions
 if __name__ == "__main__":
     print("welcome")
@@ -324,6 +411,10 @@ if __name__ == "__main__":
             folderToDB()
         elif choice.upper() == "M":
             multiTagFile()
+        elif choice.upper() == "E":
+            selectSubset()
+        elif choice.upper() == "C":
+            customQuery()
         elif choice.upper() == "Z":
             print(helperMenu)
             x = input(">")
@@ -331,3 +422,6 @@ if __name__ == "__main__":
                 y = input("Enter name (for tag) or path (for file): ")
                 z = input("Enter type (\'files\' or \'tags\'): ")
                 print(checkDuplicate(y,z))
+            if x.upper() == "G":
+                y = input("Do you want list of \'id\', \'name\' or \'both\'")
+                print(getTags(y))
